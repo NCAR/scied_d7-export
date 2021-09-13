@@ -1,0 +1,1663 @@
+<?php
+// $Id$
+use Symfony\Component\Yaml\Yaml;
+use Symfony\Component\Yaml\Parser;
+
+drupal_set_time_limit(0);
+
+/**
+ * Implements hook_help().
+ */
+function scied_export_tools_help($path, $arg)
+{
+    if ($path == 'admin/help/scied_export') {
+        $txt = 'This module exports all SciEd content into yaml files to be imported into D9 for WebMod2';
+        return '<p>' . $txt . '</p>';
+    }
+}
+
+
+/**
+*
+**/
+function scied_export_menu()
+{
+    $items['admin/config/webmod_content_export'] = array(
+  'title' => 'Export SciEd Content',
+  'description' => 'Export all SciEd Content',
+  'page callback' => 'scied_export_main_page',
+  'type' => MENU_NORMAL_ITEM,
+  'menu_name' => 'management',
+  'access arguments' => array('administer site configuration')
+  );
+
+
+    $items['admin/config/webmod_content_export/scied_get_basic_page_media'] = array(
+    'title' => 'Export SciEd Media',
+    'description' => 'Export all Media Type as basic pages.  Note: this may take some time to run.  Do not refresh page.',
+    'page callback' => 'scied_export_basic_page',
+    'page arguments' => array('video'),
+    'type' => MENU_NORMAL_ITEM,
+    'menu_name' => 'management',
+    'access arguments' => array('access administration pages')
+  );
+    $items['admin/config/webmod_content_export/scied_get_basic_page_image'] = array(
+  'title' => 'Export SciEd Images',
+  'description' => 'Export all Image Type as basic pages.  Note: this may take some time to run.  Do not refresh page.',
+  'page callback' => 'scied_export_basic_page',
+  'page arguments' => array('image'),
+  'type' => MENU_NORMAL_ITEM,
+  'menu_name' => 'management',
+  'access arguments' => array('access administration pages')
+);
+    $items['admin/config/webmod_content_export/scied_get_basic_page_long_content'] = array(
+    'title' => 'Export SciEd Long Content Type',
+    'description' => 'Export all Long Content Type as basic pages.  Note: this may take some time to run.  Do not refresh page.',
+    'page callback' => 'scied_export_basic_page',
+    'page arguments' => array('long_content_page'),
+    'type' => MENU_NORMAL_ITEM,
+    'menu_name' => 'management',
+    'access arguments' => array('access administration pages')
+    );
+    $items['admin/config/webmod_content_export/scied_get_taxonomies'] = array(
+    'title' => 'Export SciEd Taxonomies',
+    'description' => 'Export all SciEd Taxonomies.  Note: this may take some time to run.  Do not refresh page.',
+    'page callback' => 'scied_export_taxonomies',
+    'type' => MENU_NORMAL_ITEM,
+    'menu_name' => 'management',
+    'access arguments' => array('administer site configuration')
+  );
+    $items['admin/config/webmod_content_export/scied_get_activities'] = array(
+    'title' => 'Export SciEd Activities',
+    'description' => 'Export all Activities and Student pages as basic pages.  Note: this may take some time to run.  Do not refresh page',
+    'page callback' => 'scied_export_activities',
+    'type' => MENU_NORMAL_ITEM,
+    'menu_name' => 'management',
+    'access arguments' => array('administer site configuration')
+  );
+
+
+      $items['admin/config/webmod_content_export/scied_get_images'] = array(
+      'title' => 'Retrieve SciEd Image Files',
+      'description' => 'Retrieve previously identified images.  Note: this may take some time to run.  Do not refresh page.',
+      'page callback' => 'scied_export_image_files',
+      'type' => MENU_NORMAL_ITEM,
+      'menu_name' => 'management',
+      'access arguments' => array('access administration pages')
+    );
+
+
+        $items['admin/config/webmod_content_export/scied_get_documents'] = array(
+        'title' => 'Retrieve SciEd Document Files',
+        'description' => 'Retrieve previously identified document.  Note: this may take some time to run.  Do not refresh page.',
+        'page callback' => 'scied_export_document_files',
+        'type' => MENU_NORMAL_ITEM,
+        'menu_name' => 'management',
+        'access arguments' => array('access administration pages')
+      );
+
+    return $items;
+}
+
+
+/**
+*
+**/
+function rm_whitespace($str)
+{
+    $str = str_replace("&nbsp;", "", $str);
+    $str = preg_replace('/\s+/', ' ', $str);
+    $str = trim($str);
+
+    return $str;
+}
+
+
+/**
+*
+**/
+function is_absolute($url)
+{
+    $pattern = "/^(?:ftp|https?|feed):\/\/(?:(?:(?:[\w\.\-\+!$&'\(\)*\+,;=]|%[0-9a-f]{2})+:)*
+    (?:[\w\.\-\+%!$&'\(\)*\+,;=]|%[0-9a-f]{2})+@)?(?:
+    (?:[a-z0-9\-\.]|%[0-9a-f]{2})+|(?:\[(?:[0-9a-f]{0,4}:)*(?:[0-9a-f]{0,4})\]))(?::[0-9]+)?(?:[\/|\?]
+    (?:[\w#!:\.\?\+=&@$'~*,;\/\(\)\[\]\-]|%[0-9a-f]{2})*)?$/xi";
+
+    return (bool) preg_match($pattern, $url);
+}
+function relative_url_slash_exists($url)
+{
+    if ($url[0] != '/') {
+        return false;
+    }
+    return true;
+}
+
+
+/**
+*
+**/
+function retrieve_summary($item_wrapper)
+{
+    $summary = '';
+    if (isset($item_wrapper->body) && isset($item_wrapper->body->value()['summary'])) {
+        try {
+            $summary  = $item_wrapper->body->value()['summary'];
+        } catch (EntityMetadataWrapperException $exc) {
+            $summary  = '';
+        }
+    }
+    return $summary;
+}
+
+
+/**
+*
+**/
+function retrieve_body($item_wrapper)
+{
+    $body = '';
+    if (isset($item_wrapper->body)) {
+        try {
+            $body = $item_wrapper->body->value->value(array('sanitize' => true));
+        } catch (EntityMetadataWrapperException $exc) {
+            $body = '';
+        }
+    }
+    return $body;
+}
+/**
+*
+**/
+function retrieve_image($item_wrapper, $image_type_name, $complete_data = false)
+{
+    // process teaser images
+    $filepath = '';
+
+    if (isset($item_wrapper->$image_type_name)) {
+        try {
+            $image_data = $item_wrapper->$image_type_name->value();
+            $image = array();
+            if (isset($image_data['uri'])){
+              $filepath = str_replace('public://', '', $image_data['uri']);
+
+              if (isset($image_data['uri'])) {
+                  $image['filepath'] = $filepath;
+                  $image_export_data['file_path'] = $filepath;
+              }
+
+              if (isset($image_data['filename'])) {
+                  $image['filename'] = $image_data['filename'];
+                  $image_export_data['name'] = $image_data['filename'];
+              }
+
+              if (isset($image_data['alt'])) {
+                  $image['alt'] = $image_data['alt'];
+                  $image_export_data['alt'] = $image_data['alt'];
+                  $image_export_data['caption'] = '';
+                  $image_export_data['credit'] = '';
+              }
+              if (isset($image_data['width'])) {
+                  $image['width'] = $image_data['width'];
+              }
+              if (isset($image_data['height'])) {
+                  $image['height'] = $image_data['height'];
+              }
+
+              if (isset($image_export_data['file_path'])) {
+                  write_image_files($image_export_data, $image_export_data['name']);
+              }
+
+              if ($complete_data == false) {
+                  if (isset($image_data)) {
+                      return '/media/image/'.$image_data['filename'];
+                  }
+              }
+            }
+            return $image;
+        } catch (EntityMetadataWrapperException $exc) {
+            $image = array();
+        }
+    }
+    return false;
+}
+
+/**
+*
+*
+**/
+function retrieve_weight($item_wrapper)
+{
+    $weight = 0;
+
+    if (isset($item_wrapper->field_weight)) {
+        try {
+            $weight = $item_wrapper->field_weight->value();
+        } catch (EntityMetadataWrapperException $exc) {
+            $weight = 0;
+        }
+    }
+    return (int)$weight;
+}
+
+
+/**
+*
+*
+**/
+function retrieve_special_collections($item_wrapper)
+{
+    $ary = [];
+    if (isset($item_wrapper->field_special_collections) && $item_wrapper->field_special_collections->value()) {
+        $items = explode(',', $item_wrapper->field_special_collections->label());
+        foreach ($items as $index => $item) {
+            array_push($ary, '/terms/special_collection/' . clean_text(trim($item)));
+        }
+    }
+    return $ary;
+}
+/**
+*
+*
+**/
+function retrieve_grade_levels($item_wrapper)
+{
+    $ary = [];
+    if (isset($item_wrapper->field_grade_levels) && $item_wrapper->field_grade_levels->value()) {
+        $items = explode(',', $item_wrapper->field_grade_levels->label());
+        foreach ($items as $index => $item) {
+            array_push($ary, '/terms/grade_level/' . clean_text(trim($item)));
+        }
+    }
+    return $ary;
+}
+/**
+*
+*
+**/
+function retrieve_activity_type($item_wrapper)
+{
+    $ary = [];
+    if (isset($item_wrapper->field_activity_type) && $item_wrapper->field_activity_type->value()) {
+        $items = explode(',', $item_wrapper->field_activity_type->label());
+        foreach ($items as $index => $item) {
+            array_push($ary, '/terms/activity_type/' . clean_text(trim($item)));
+        }
+    }
+    return $ary;
+}
+
+/**
+*
+*
+**/
+function retrieve_copyright($item_wrapper)
+{
+    $copyright = '';
+    if (isset($item_wrapper->field_copywrite_term) && $item_wrapper->field_copywrite_term->value()) {
+        try {
+            $copyright = $item_wrapper->field_copywrite_term->value()->name;
+        } catch (EntityMetadataWrapperException $exc) {
+            $copyright = '';
+        }
+    }
+    if ($copyright && isset($item_wrapper->field_copywrite_year) && $item_wrapper->field_copywrite_year->value()) {
+        try {
+            $copyright_year = $item_wrapper->field_copywrite_year->value()->name . ' ';
+        } catch (EntityMetadataWrapperException $exc) {
+            $copyright_year = '';
+        }
+        $copyright = $copyright_year . $copyright;
+    }
+    return $copyright;
+}
+
+/**
+*
+*
+**/
+function retrieve_image_snippet($item_wrapper)
+{
+    $image_content = '';
+    if (isset($item_wrapper->field_larg_image)) {
+        $large_image = retrieve_image($item_wrapper, 'field_larg_image');
+        $box_width = $large_image['width'];
+
+        $image_content .= '<div class="imagecontent-image" style="max-width:'.$box_width.'px;">';
+        $image_content .= '<img class="imagecontent" src="'.str_replace('public://', '/sites/default/files/', $large_image['uri']).'" alt="'.$large_image['alt'].'" width="'.$large_image['width'].'" height="'.$large_image['height'].'" />';
+
+        // credit
+        if (isset($item_wrapper->field_image_credit)) {
+            $image_content .= '<p>' . $item_wrapper->field_image_credit->value(array('sanitize' => true)) . '</p>';
+        }
+        $image_content .= '</div>';
+    }
+    return $image_content;
+}
+/**
+*
+*
+**/ function retrieve_media_embed_snippet($item_wrapper)
+{
+    $embed_content = '';
+    if (isset($item_wrapper->field_youtube_video_link)) {
+        try {
+            $media_embed_code = $item_wrapper->field_youtube_video_link->value->value(array('sanitize' => true));
+
+            // video class
+            $media_class = '';
+            if (isset($item_wrapper->field_video_class)) {
+                try {
+                    $media_class = $item_wrapper->field_video_class->value(array('sanitize' => true));
+                } catch (EntityMetadataWrapperException $exc) {
+                    $media_class = '';
+                }
+            }
+
+            // video width
+            $media_width = '';
+            if (isset($item_wrapper->field_width_of_the_online_media)) {
+                try {
+                    $media_width = $item_wrapper->field_width_of_the_online_media->value(array('sanitize' => true));
+                } catch (EntityMetadataWrapperException $exc) {
+                    $media_width = '';
+                }
+            }
+
+            // video credit
+            $media_credit = '';
+            if (isset($item_wrapper->field_image_credit)) {
+                try {
+                    $media_credit = $item_wrapper->field_image_credit->value->value(array('sanitize' => true));
+                } catch (EntityMetadataWrapperException $exc) {
+                    $media_credit = '';
+                }
+            }
+
+            // video caption
+            $media_short_caption = '';
+            if (isset($item_wrapper->field_short_caption)) {
+                try {
+                    $media_short_caption = $item_wrapper->field_short_caption->value->value(array('sanitize' => true));
+                } catch (EntityMetadataWrapperException $exc) {
+                    $media_short_caption = '';
+                }
+            }
+
+            $embed_content = '<div class="' . $media_class . '" style="width:' . $media_width . 'margin-left:auto;margin-right:auto;">' . $media_embed_code . '  ' . $media_short_caption . ' ' . $media_credit . '</div>';
+        } catch (EntityMetadataWrapperException $exc) {
+            $embed_content = '';
+        }
+    }
+    return $embed_content;
+}
+
+/**
+*
+*
+**/
+function retrieve_taxonomy($item_wrapper, $taxonomy_name)
+{
+    $taxonomy = [];
+    if (isset($item_wrapper->$taxonomy_name)) {
+        try {
+            foreach ($item_wrapper->$taxonomy_name->getIterator() as $delta => $term_wrapper) {
+                // $term_wrapper may now be accessed as a taxonomy term wrapper.
+                if (isset($term_wrapper->name)) {
+                    $tid = $term_wrapper->tid->value();
+                    $term = taxonomy_term_load($tid);
+                    if ($term->name) {
+                        array_push($taxonomy, '/terms/' . $term->vocabulary_machine_name . '/' . clean_text($term->name));
+                    }
+                }
+            }
+        } catch (EntityMetadataWrapperException $exc) {
+            // no action
+        }
+    }
+
+    return $taxonomy;
+}
+
+/**
+*
+**/
+function retrieve_redirects($nid, $path) {
+
+  $a_redirects = [];
+  $node_path = 'node/' . $nid;
+  $result = db_query('SELECT * FROM {redirect} r WHERE r.redirect = :node', array(':node' => $node_path));
+
+  foreach ($result as $record) {
+    $a_item = [];
+    // just making sure
+    if($path != $record->source && !strstr($record->source, 'node/')) {
+      $a_item['path'] = $record->source;
+      array_push($a_redirects, $a_item);
+    }
+  }
+
+  return $a_redirects;
+
+}
+
+/**
+*
+*
+**/
+function retrieve_links($item_wrapper, $link_type)
+{
+    $a_links = [];
+    if (isset($item_wrapper->$link_type)) {
+        try {
+            foreach ($item_wrapper->$link_type->value() as $link) {
+                $a_temp = [];
+                $url = rm_whitespace($link['url']);
+                if (!is_absolute($url)) {
+                    if (!relative_url_slash_exists($url)) {
+                        $url = '/' . $url;
+                    }
+                }
+                $a_temp['url'] = $url;
+                $a_temp['title'] = rm_whitespace($link['title']);
+                array_push($a_links, $a_temp);
+            }
+        } catch (EntityMetadataWrapperException $exc) {
+            // no action
+        }
+    }
+
+    return $a_links;
+}
+
+
+// activity Summary
+/**
+*
+*
+**/
+function retrieve_activity_summary($item_wrapper)
+{
+    $str = '';
+
+    if (isset($item_wrapper->field_activity_summary)) {
+        try {
+            $str = rm_whitespace($item_wrapper->field_activity_summary->value()['value']);
+        } catch (EntityMetadataWrapperException $exc) {
+            // no action
+        }
+    }
+    return $str;
+}
+
+// activity time
+/**
+*
+*
+**/
+function retrieve_activity_time($item_wrapper)
+{
+    $str = '';
+    if (isset($item_wrapper->field_activity_time) && $item_wrapper->field_activity_time->value()) {
+        try {
+            // normalize section titles
+            $a_search = array('<h3>Time</h3>');
+            $str = str_replace($a_search, '<h2>Time</h2>', rm_whitespace($item_wrapper->field_activity_time->value()['value']));
+        } catch (EntityMetadataWrapperException $exc) {
+            // no action
+        }
+    }
+
+    return $str;
+}
+
+// activity learning goals
+/**
+*
+*
+**/
+function retrieve_activity_learning_goals($item_wrapper)
+{
+    $str = '';
+    if (isset($item_wrapper->field_activity_learning_goals) && $item_wrapper->field_activity_materials->value()) {
+        try {
+            // normalize section titles
+            $a_search = array('<h2>Learning Objectives:</h2>', '<h2><strong>Learning Goals</strong></h2>','<h2><strong>Learning Goal</strong></h2>', '<h2>Learning<strong> Goal</strong></h2>', '<h2>Learning Goal:</h2>');
+            $a_replace = array('<h2>Learning Objectives</h2>', '<h2>Learning Goals</h2>', '<h2>Learning Goal</h2>', '<h2>Learning Goal</h2>', '<h2>Learning Goal</h2>');
+            $str = str_replace($a_search, $a_replace, rm_whitespace($item_wrapper->field_activity_materials->value()['value']));
+        } catch (EntityMetadataWrapperException $exc) {
+            // no action
+        }
+    }
+
+    return $str;
+}
+
+// activity standards
+/**
+*
+*
+**/
+function retrieve_activity_standards($item_wrapper)
+{
+    $str = '';
+    if (isset($item_wrapper->field_activity_standards) && $item_wrapper->field_activity_standards->value()) {
+        try {
+            // normalize section titles
+            $a_search = array('<span style="font-family: inherit; font-size: 1rem;">Colorado State Science Standards</span>','<strong style="font-size: 2rem;">Next Generation Science Standards</strong>','<h2>','</h2>');
+            $a_replace = array('<h2>Colorado State Science Standards</h2>', 'Next Generation Science Standards','<h3>','</h3>');
+            $str = str_replace($a_search, $a_replace, rm_whitespace($item_wrapper->field_activity_standards->value()['value']));
+        } catch (EntityMetadataWrapperException $exc) {
+            // no action
+        }
+    }
+
+    return '<h2>Educational Standards</h2>' .$str;
+}
+
+// activity materials
+/**
+*
+*
+**/
+function retrieve_activity_materials($item_wrapper)
+{
+    $str = '';
+    if (isset($item_wrapper->field_activity_materials) && $item_wrapper->field_activity_materials->value()) {
+        try {
+            // normalize section titles
+            $a_search = array('<h2><span style="font-family: Arial, Helvetica, sans-serif;">Materials</span></h2>','<h2><strong>Materials Needed</strong></h2>', '<h3>Materials</h3>', '<h2>Materials:</h2>', '<h2>Supplies Needed:</h2>','<h2>Supplies</h2>','<h2><span style="font-size: 1.6875rem;">Materials</span></h2>');
+            $str = str_replace($a_search, '<h2>Materials</h2>', rm_whitespace($item_wrapper->field_activity_materials->value()['value']));
+        } catch (EntityMetadataWrapperException $exc) {
+            // no action
+        }
+    }
+
+    return $str;
+}
+
+// activity preparation
+/**
+*
+*
+**/
+function retrieve_activity_preparation($item_wrapper)
+{
+    $str = '';
+    if (isset($item_wrapper->field_activity_preparation) && $item_wrapper->field_activity_preparation->value()) {
+        try {
+            // normalize section titles
+            $a_search = array('<h2>Teacher Preparation</h2>','<h2>Teacher Preparations</h2>','<h3>Directions</h3>','<h3>Preparation</h3>','<h2>Preparation:</h2>','<h2>Preparation: Think It Through</h2>','<h2>Setup</h2>');
+            $str = str_replace($a_search, '<h2>Preparation</h2>', rm_whitespace($item_wrapper->field_activity_preparation->value()['value']));
+        } catch (EntityMetadataWrapperException $exc) {
+            // no action
+        }
+    }
+    return $str;
+}
+
+// activity directions
+/**
+*
+*
+**/
+function retrieve_activity_directions($item_wrapper)
+{
+    $str = '';
+    if (isset($item_wrapper->field_activity_directions) && $item_wrapper->field_activity_directions->value()) {
+        try {
+            // normalize section titles
+            $a_search = array('<h2>Directions for Teacher</h2>','<h2>Instruction</h2>','<h2>Procedures</h2>','<h2>Procedure</h2>','<h2>Introduction</h2>','<h2><strong>Introduction</strong></h2>','<h2><strong>Introduction:</strong></h2>','<h2>Introduction:</h2>','<h2>Instructions</h2>','<h2>Directions:</h2>', '<h2>Introduction (outside)</h2>','<h2>Game Instructions:</h2>','<h2>Step-by-step Instructions (for the teacher)</h2>','<h2>Step-by-step Procedures</h2>','<h2>Step-by-step Instructions</h2>');
+            $str = str_replace($a_search, '<h2>Directions</h2>', rm_whitespace($item_wrapper->field_activity_directions->value()['value']));
+        } catch (EntityMetadataWrapperException $exc) {
+            // no action
+        }
+    }
+
+    return $str;
+}
+
+// activity assessment
+/**
+*
+*
+**/
+function retrieve_activity_assessment($item_wrapper)
+{
+    $str = '';
+    if (isset($item_wrapper->field_activity_assessment) && $item_wrapper->field_activity_assessment->value()) {
+        try {
+            // normalize section titles
+            $a_search = array('<h2>Sense-making:</h2>','<h3>Assessment</h3>','<h2>Assessment Ideas</h2>','<h2>Reflection and Assessment:</h2>','<h2>Ask yourself the following questions:</h2>','<h2>Use the following questions to facilitate class discussion:</h2>','<h2>Ask students the following questions to guide discussion:</h2>','<h2>Adaptation for younger or older students:</h2>','<h2>Ask Your Students to Uncover the Answers to the Following Questions</h2>','<h2>Ask students the following questions to guide discussion</h2>','<h2>Use the following questions to facilitate class discussion</h2>');
+            $a_replace = array('<h2>Sense-making</h2>','<h2>Assessment</h2>','<h2>Assessment</h2>','<h2>Reflection and Assessment</h2>','<h2>Ask yourself the following questions</h2>','<h2>Use the following questions to facilitate class discussion</h2>','<h2>Ask students the following questions to guide discussion</h2>','<h2>Adaptation for younger or older students</h2>','<h2>Ask students the following questions</h2>','<h2>Ask students the following questions</h2>','<h2>Ask students the following questions</h2>');
+            $str = str_replace($a_search, $a_replace, rm_whitespace($item_wrapper->field_activity_assessment->value()['value']));
+        } catch (EntityMetadataWrapperException $exc) {
+            // no action
+        }
+    }
+
+    return $str;
+}
+
+
+
+// generate background pages
+
+// activity background
+/**
+*
+*
+**/
+function retrieve_activity_background($item_wrapper)
+{
+    $str = '';
+    if (isset($item_wrapper->field_activity_bkgrd_content) && $item_wrapper->field_activity_bkgrd_content->value()) {
+        try {
+            // normalize section titles
+            $a_search = array('<h2>Background Information</h2>','<h2>Background Science</h2>','<h2 dir="ltr"><span>Background Information</span></h2>','<h2>Background Information</h2>','<h2>Background Content Information</h2>');
+            $a_replace = array('<h2>Background</h2>','<h2>Background</h2>','<h2>Background</h2>','<h2>Background</h2>','<h2>Background</h2>');
+            $str = str_replace($a_search, $a_replace, rm_whitespace($item_wrapper->field_activity_bkgrd_content->value()['value']));
+        } catch (EntityMetadataWrapperException $exc) {
+            // no action
+        }
+    }
+
+    return $str;
+}
+
+// activity tips
+/**
+*
+*
+**/
+function retrieve_activity_tips($item_wrapper)
+{
+    $str = '';
+    if (isset($item_wrapper->field_activity_tips) && $item_wrapper->field_activity_tips->value()) {
+        try {
+            $a_search = array('<h2>Learn more:</h2>');
+
+            $str = str_replace($a_search, '<h2>Learn More</h2>', $str = rm_whitespace($item_wrapper->field_activity_tips->value()['value']));
+        } catch (EntityMetadataWrapperException $exc) {
+            // no action
+        }
+    }
+
+    return $str;
+}
+
+
+// activity extensions
+/**
+*
+*
+**/
+function retrieve_activity_extensions($item_wrapper)
+{
+    $str = '';
+    if (isset($item_wrapper->field_activity_ext_var) && $item_wrapper->field_activity_ext_var->value()) {
+        try {
+            $a_search = array('<h2>Part 1 Extensions:</h2>','<h2>Part 3 Extensions:</h2>','<h2>Part 4 Extensions:</h2>','<h2>Part 2 Extensions:</h2>','<h3>Part 1 Extensions:</h3>','<h2>Optional Extensions</h2>','<h2>Options and Extensions</h2>','<h2>Optional Extensions &amp; Variations</h2>','<h2>Extensions &amp; Variations</h2>','<h2>Extensions&amp; Variations</h2>','<h2>Activity Extensions</h2>','<h2>Extensions:</h2>','<h3><em>Extensions </em></h3>','<h2>Advanced Extensions</h2>');
+            $a_replace = array('<h2>Part 1 Extensions</h2>','<h2>Part 3 Extensions</h2>','<h2>Part 4 Extensions</h2>','<h2>Part 2 Extensions</h2>','<h2>Part 1 Extensions</h2>','<h2>Extensions</h2>','<h2>Extensions and Variations</h2>','<h2>Extensions and Variations</h2>','<h2>Extensions and Variations</h2>','<h2>Extensions and Variations</h2>','<h2>Extensions</h2>','<h2>Extensions</h2>','<h2>Extensions</h2>','<h2>Extensions</h2>');
+            $str = str_replace($a_search, $a_replace, rm_whitespace($item_wrapper->field_activity_ext_var->value()['value']));
+        } catch (EntityMetadataWrapperException $exc) {
+            // no action
+        }
+    }
+
+    return $str;
+}
+
+
+// activity related  activities
+/**
+*
+*
+**/
+function retrieve_activity_related_activities($item_wrapper)
+{
+    $str = '';
+    if (isset($item_wrapper->field_activity_related) && $item_wrapper->field_activity_related->value()) {
+        try {
+            $str = rm_whitespace($item_wrapper->field_activity_related->value()['value']);
+        } catch (EntityMetadataWrapperException $exc) {
+            // no action
+        }
+    }
+
+    return $str;
+}
+
+// activity related links
+/**
+*
+*
+**/
+function retrieve_activity_related_links($item_wrapper)
+{
+    $str = '';
+    if (isset($item_wrapper->field_activity_related_content) && $item_wrapper->field_activity_related_content->value()) {
+        try {
+            $a_search = array('<h2>Related Content Links:</h2>','<h2>Additional Resource Links to Activities &amp; Aerospace Content</h2>','<h2>Related Content Links</h2>','<h2>Explore more!</h2>','<h2>Resources</h2>','<h2><strong>Learn more online</strong></h2>','<h2>Related Resources and Links</h2>','<h2>Additional Resources:</h2>','<h2>Additional Resources</h2>','<h2>Resources:</h2>','<h3>Other resources</h3>');
+
+            $str = str_replace($a_search, '<h2>Related Resources</h2>', rm_whitespace($item_wrapper->field_activity_related_content->value()['value']));
+        } catch (EntityMetadataWrapperException $exc) {
+            // no action
+        }
+    }
+
+    return $str;
+}
+
+
+// activity sources
+/**
+*
+*
+**/
+function retrieve_activity_sources($item_wrapper)
+{
+    $str = '';
+    if (isset($item_wrapper->field_activity_source_credits) && $item_wrapper->field_activity_source_credits->value()) {
+        try {
+            $a_search = array('<h3>Credits</h3>');
+
+            $str = str_replace($a_search, '<h2>Credits</h2>', rm_whitespace($item_wrapper->field_activity_source_credits->value()['value']));
+        } catch (EntityMetadataWrapperException $exc) {
+            // no action
+        }
+    }
+    return $str;
+}
+
+
+
+// generate student pages
+
+
+// activity student intro
+/**
+*
+*
+**/
+function retrieve_activity_student_introduction($item_wrapper)
+{
+    $str = '';
+    if (isset($item_wrapper->field_activity_stud_intro) && $item_wrapper->field_activity_stud_intro->value()) {
+        try {
+            $str = rm_whitespace($item_wrapper->field_activity_stud_intro->value()['value']);
+        } catch (EntityMetadataWrapperException $exc) {
+            // no action
+        }
+    }
+
+    return $str;
+}
+
+// activity student background
+/**
+*
+*
+**/
+function retrieve_activity_student_background($item_wrapper)
+{
+    $str = '';
+    if (isset($item_wrapper->field_activity_stud_bkgrd) && $item_wrapper->field_activity_stud_bkgrd->value()) {
+        try {
+            $str = rm_whitespace($item_wrapper->field_activity_stud_bkgrd->value()['value']);
+        } catch (EntityMetadataWrapperException $exc) {
+            // no action
+        }
+    }
+
+    return $str;
+}
+
+
+// activity student materials
+/**
+*
+*
+**/
+function retrieve_activity_student_materials($item_wrapper)
+{
+    $str = '';
+    if (isset($item_wrapper->field_activity_stud_material) && $item_wrapper->field_activity_stud_material->value()) {
+        try {
+            $str = rm_whitespace($item_wrapper->field_activity_stud_material->value()['value']);
+        } catch (EntityMetadataWrapperException $exc) {
+            // no action
+        }
+    }
+
+    return $str;
+}
+
+
+// activity student instructions
+/**
+*
+*
+**/
+function retrieve_activity_student_instructions($item_wrapper)
+{
+    $str = '';
+    if (isset($item_wrapper->field_activity_stud_steps) && $item_wrapper->field_activity_stud_steps->value()) {
+        try {
+            $str = rm_whitespace($item_wrapper->field_activity_stud_steps->value()['value']);
+        } catch (EntityMetadataWrapperException $exc) {
+            // no action
+        }
+    }
+
+    return $str;
+}
+
+
+// activity student worksheets
+/**
+*
+*
+**/
+function retrieve_activity_student_worksheets($item_wrapper)
+{
+    $str = '';
+    if (isset($item_wrapper->field_activity_stud_wrksheets)) {
+        try {
+            if (isset($item_wrapper->field_activity_stud_wrksheets) && $item_wrapper->field_activity_stud_wrksheets->value()) {
+                foreach ($item_wrapper->field_activity_stud_wrksheets->value() as $value) {
+                    $str .= rm_whitespace($value['value']);
+                }
+            }
+        } catch (EntityMetadataWrapperException $exc) {
+            // no action
+        }
+    }
+    return $str;
+}
+
+
+// activity student reflections
+/**
+*
+*
+**/
+function retrieve_activity_student_reflections($item_wrapper)
+{
+    $str = '';
+    if (isset($item_wrapper->field_activity_stud_reflect) && $item_wrapper->field_activity_stud_reflect->value()) {
+        try {
+            $str = rm_whitespace($item_wrapper->field_activity_stud_reflect->value()['value']);
+        } catch (EntityMetadataWrapperException $exc) {
+            // no action
+        }
+    }
+
+    return $str;
+}
+
+
+// activity student assessments
+/**
+*
+*
+**/
+function retrieve_activity_student_assessments($item_wrapper)
+{
+    $str = '';
+    if (isset($item_wrapper->field_activity_stud_assess) && $item_wrapper->field_activity_stud_assess->value()) {
+        try {
+            $str = rm_whitespace($item_wrapper->field_activity_stud_assess->value()['value']);
+        } catch (EntityMetadataWrapperException $exc) {
+            // no action
+        }
+    }
+
+    return $str;
+}
+
+/**
+ * Write the data to files
+ *
+ * @param $file_path
+ *   The url-inspired path the file should reside
+ * @param $file_name
+ *   The content type inspired name of the file
+ * @param $data
+ *   The actual data to be written
+ */
+function write_files($file_path, $entity_type, $bundle, $data)
+{
+    $file_path = 'public://source-site/' . $file_path;
+
+    if ($bundle != '' ){
+      $ymlFile = $file_path . '/' . $entity_type . '.' . $bundle . '.yml';
+    } else {
+      $ymlFile = $file_path . '/' . $entity_type . '.yml';
+    }
+    @drupal_mkdir($file_path, '0775', true);
+    //$s_file_contents = json_encode($data);
+
+    $s_file_contents = Yaml::dump($data, 2);
+    $fh = fopen($ymlFile, 'w+') or die("can't open file");
+    fwrite($fh, $s_file_contents);
+    fclose($fh);
+}
+
+/**
+*
+**/
+function write_reg_files($image_data, $filename)
+{
+  $data['generated'] = date(DATE_ATOM);
+
+  $entity_type = 'media';
+  $bundle = 'document';
+  $file_path = $entity_type . '/' . $bundle . '/' . $filename;
+  $data['name'] = $image_data['name'];
+  if(substr($image_data['file_path'],0,1) != '/') {
+    $image_data['file_path'] = '/'.$image_data['file_path'];
+  }
+  $data['file_path'] = '/files' . $image_data['file_path'];
+
+  write_files($file_path, $entity_type, $bundle, $data);
+
+}
+
+
+/**
+*
+**/
+function write_image_files($image_data, $filename)
+{
+    $data['generated'] = date(DATE_ATOM);
+
+    $entity_type = 'media';
+    $bundle = 'image';
+    $file_path = $entity_type . '/' . $bundle . '/' . $filename;
+    $data['name'] = $image_data['name'];
+    if(substr($image_data['file_path'],0,1) != '/') {
+      $image_data['file_path'] = '/'.$image_data['file_path'];
+    }
+    $data['file_path'] = '/files' . $image_data['file_path'];
+
+    if (!empty($image_data['alt'])) {
+        $data['alt'] = $image_data['alt'];
+    }
+    if (!empty($image_data['caption'])) {
+        $data['caption'] = $image_data['caption'];
+    }
+    if (!empty($image_data['credit'])) {
+        $data['credit'] = $image_data['credit'];
+    }
+
+    write_files($file_path, $entity_type, $bundle, $data);
+
+
+}
+/**
+**
+**/
+function save_file($source, $destination, $file_path) {
+
+  $ch = curl_init();
+  curl_setopt($ch, CURLOPT_URL, $source);
+  curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
+  $s_file_contents = curl_exec ($ch);
+  curl_close ($ch);
+
+
+  //@drupal_mkdir($file_path, '0775', true);
+
+  //$fh = fopen($destination, 'w+') or die("can't open file");
+  //fwrite($fh, $s_file_contents);
+  //fclose($fh);
+}
+
+/**
+*  get the data
+**/
+function retrieve_data($entity_type, $bundle)
+{
+    $query = new EntityFieldQuery();
+
+    if($entity_type != 'taxonomy_term') {
+      $query->entityCondition('entity_type', $entity_type)
+      ->entityCondition('bundle', $bundle)
+      ->propertyOrderBy('title', 'DESC')
+      ->execute();
+    } else {
+      $query->entityCondition('entity_type', $entity_type)
+      ->entityCondition('bundle', $bundle)
+      ->execute();
+    }
+
+    $result = $query->execute();
+
+    if (isset($result[$entity_type])) {
+        $data_items_nids = array_keys($result[$entity_type]);
+        $data_items = entity_load($entity_type, $data_items_nids);
+
+        return $data_items;
+    }
+}
+/**
+*  primarily to make taxonomy terms url friendly
+**/
+function clean_text($string)
+{
+    $string = str_replace('/', '-', str_replace(' ', '-', $string)); // Replaces all spaces and slashes with hyphens.
+
+    return strtolower(preg_replace('/[^A-Za-z0-9\-]/', '', $string)); // Removes special chars.
+}
+
+/**
+*
+*
+**/
+function find_exportables($content)
+{
+    $doc = new DOMDocument();
+    @$doc->loadHTML($content);
+
+
+
+
+
+        // process linked images and files
+        $allowed = array('doc', 'docx', 'ppt', 'pptx', 'xls', 'xlsx', 'pdf');
+        $img_ext = array('jpg','gif','png','jpeg', 'JPG', 'GIF', 'PNG','JPEG');
+        $href_tags = $doc->getElementsByTagName('a');
+
+        foreach($href_tags as $tag){
+          $file_data = [];
+          $hrefSrc = $tag->getAttribute('href');
+
+          // verify this is a scied files
+          $hrefInfo = parse_url($hrefSrc);
+          if (! empty($hrefInfo['host'])) {
+            // if absolute path check if is a scied file
+            if (str_contains($hrefInfo['host'], 'scied.ucar.edu')) {
+              $full_path = $hrefInfo['path'];
+              $a_parts = explode('/',$full_path);
+              $filename = array_pop($a_parts);
+
+              $ext = pathinfo($filename, PATHINFO_EXTENSION);
+              if (in_array($ext, $allowed)) {
+                $file_data['name'] = $filename;
+                $file_data['file_path'] = str_replace('/sites/default/files','',$hrefInfo['path']);
+
+                write_reg_files($file_data, $filename);
+              } else   if (in_array($ext, $img_ext)) {
+
+                  $file_data = [];
+                // this is an image
+                $file_data['name'] = $filename;
+                $file_data['file_path'] = str_replace('/sites/default/files','',$hrefInfo['path']);
+                write_image_files($file_data, $filename);
+              }
+
+
+            }
+          } elseif (empty($hrefInfo['host'])) {
+            // already relative
+            $full_path = $hrefInfo['path'];
+            $a_parts = explode('/',$full_path);
+            $filename = array_pop($a_parts);
+
+            $ext = pathinfo($filename, PATHINFO_EXTENSION);
+            if (in_array($ext, $allowed)) {
+              $file_data['name'] = $filename;
+              $file_data['name'] = $filename;
+              $file_data['file_path'] = str_replace('/sites/default/files','',$full_path);
+
+              write_reg_files($file_data, $filename);
+            } else   if (in_array($ext, $img_ext)) {
+
+                $file_data = [];
+              // this is an image
+              $file_data['name'] = $filename;
+              $file_data['file_path'] = str_replace('/sites/default/files','',$hrefInfo['path']);
+              write_image_files($file_data, $filename);
+            }
+
+          }
+        }
+
+
+
+    // process image tags
+    $img_tags = $doc->getElementsByTagName('img');
+    foreach ($img_tags as $tag) {
+        $image_data = [];
+        $imgSrc = $tag->getAttribute('src');
+        $image_data['alt'] = $tag->getAttribute('alt');
+
+        $imgInfo = parse_url($imgSrc);
+        // ensure is a relative path
+        if (! empty($imgInfo['host'])) {
+            // if absolute path check if is a scied file
+            if (str_contains($imgInfo['host'], 'scied.ucar.edu')) {
+                $full_path = $imgInfo['path'];
+                $a_parts = explode('/',$full_path);
+                $filename = array_pop($a_parts);
+                $image_data['name'] = $filename;
+                $image_data['file_path'] = str_replace('/sites/default/files','',$imgInfo['path']);
+
+                write_image_files($image_data, $filename);
+            }
+        } elseif (empty($imgInfo['host'])) {
+            // already relative
+            $full_path = $imgInfo['path'];
+            $a_parts = explode('/',$full_path);
+            $filename = array_pop($a_parts);
+            $image_data['name'] = $filename;
+            $image_data['file_path'] = str_replace('/sites/default/files','',$full_path);
+
+            write_image_files($image_data, $filename);
+        }
+    }
+
+}
+
+/**
+*
+**/
+function build_url(array $parts)
+{
+    return (isset($parts['scheme']) ? "{$parts['scheme']}:" : '') .
+        ((isset($parts['user']) || isset($parts['host'])) ? '//' : '') .
+        (isset($parts['user']) ? "{$parts['user']}" : '') .
+        (isset($parts['pass']) ? ":{$parts['pass']}" : '') .
+        (isset($parts['user']) ? '@' : '') .
+        (isset($parts['host']) ? "{$parts['host']}" : '') .
+        (isset($parts['port']) ? ":{$parts['port']}" : '') .
+        (isset($parts['path']) ? "{$parts['path']}" : '') .
+        (isset($parts['query']) ? "?{$parts['query']}" : '') .
+        (isset($parts['fragment']) ? "#{$parts['fragment']}" : '');
+}
+
+/**
+**
+**/
+function scied_export_image_files(){
+  // read in all media/image files
+    $yaml = new Parser();
+
+  $media_image_folder = '/code/sites/default/files/source-site/media/image/';
+  $files = get_directory_files($media_image_folder);
+
+  $str = '';
+  //print_var(count($files));
+  //exit();
+  //images 3194
+  $max = 3194;
+  for($i=3000;$i<$max;$i++){
+  //foreach($files as $index => $file) {
+    $file = $files[$i];
+
+    $value = $yaml->parse(file_get_contents('/code/sites/default/' . $file));
+    $file_path = $value['file_path'];
+    if(!empty($file_path )){
+      $str .= "'" .$file_path. "', <br/>";
+    }
+    //$source = 'https://scied.ucar.edu/' . $file_path;
+    //$destination = 'source-site/files/' . $file_path;
+    //save_file($source, $destination, $file_path);
+
+  }
+
+
+  return $str;
+
+}
+/**
+**
+**/
+function scied_export_document_files(){
+  // read in all media/document files
+    $yaml = new Parser();
+
+  $media_document_folder = '/code/sites/default/files/source-site/media/document/';
+  $files = get_directory_files($media_document_folder);
+
+  $str = '';
+//print_var(count($files));
+//exit();
+// documents 786
+//$max = 786;
+//for($i=3000;$i<$max;$i++){
+  foreach($files as $index => $file) {
+  //$file = $files[$i];
+
+    $value = $yaml->parse(file_get_contents('/code/sites/default/' . $file));
+    $file_path = $value['file_path'];
+    if(!empty($file_path )){
+      $str .= "'" .$file_path. "', <br/>";
+    }
+    //$source = 'https://scied.ucar.edu/' . $file_path;
+    //$destination = 'source-site/files/' . $file_path;
+    //save_file($source, $destination, $file_path);
+
+  }
+
+
+  return $str;
+
+}
+
+/**
+**
+**/
+function get_directory_files($dir, &$results = array()) {
+    $files = scandir($dir);
+
+    foreach ($files as $key => $value) {
+        $path = realpath($dir . DIRECTORY_SEPARATOR . $value);
+        if (!is_dir($path)) {
+            $results[] = $path;
+        } else if ($value != "." && $value != "..") {
+            get_directory_files($path, $results);
+            $results[] = $path;
+        }
+    }
+
+    return $results;
+}
+
+
+/**
+*   Export the taxonomies
+*
+**/
+function scied_export_taxonomies()
+{
+    $source_entity_type = 'taxonomy_term';
+    $taxonomy_bundles = array('activity_type', 'special_collection', 'grade_level', 'discipline', 'learning_zone_category', 'resource_type_category');
+    foreach ($taxonomy_bundles as $source_bundle) {
+        $data_items = retrieve_data($source_entity_type, $source_bundle);
+
+        foreach ($data_items as $item) {
+            $target_entity_type = $source_entity_type;
+            $target_bundle = $source_bundle;
+
+            $item_wrapper = entity_metadata_wrapper($source_entity_type, $item);
+
+            $node = [];
+            $node['generated'] = date(DATE_ATOM);
+            if (isset($item->name)) {
+                $node['name'] = $item->name;
+                $node['vocabulary'] = $target_bundle;
+
+                if (isset($item->description)) {
+                    $node['description'] = $item->description;
+                }
+
+                $file_path = 'terms/' . $target_bundle . '/' . clean_text($node['name']);
+                write_files($file_path, $target_entity_type, '', $node);
+            }
+        }
+    }
+    return '<h2>Done Processing</h2><p>Exported content is located in your files in the /source-site/ directory.</p>';
+}
+
+
+/**
+*   Export the activities
+*
+**/
+function scied_export_activities()
+{
+    $source_entity_type = 'node';
+    $node_bundles = array('activity');
+    foreach ($node_bundles as $source_bundle) {
+        $data_items = retrieve_data($source_entity_type, $source_bundle);
+
+
+// 138 activities
+// counter is a workaround for too large data bunches that take too long to process
+$counter = 0;
+$min = 0;
+$max = 50;
+
+  foreach ($data_items as $item) {
+    if($counter >= $min && $counter <= $max ){
+            $target_entity_type = 'node';
+            $target_bundle = 'tutorial';
+
+            $item_wrapper = entity_metadata_wrapper($source_entity_type, $item);
+
+            $redirects = retrieve_redirects($item->nid, $item->path['alias']);
+
+            $node = [];
+            $node['generated'] = date(DATE_ATOM);
+            $node['title'] = $item->title;
+            $node['published'] = true;
+            $node['created'] = date(DATE_ATOM, $item->created);
+            $node['updated'] = date(DATE_ATOM, $item->changed);
+
+            $node['weight'] = retrieve_weight($item_wrapper);
+
+            // process lz categories
+            $classification_lz_category = retrieve_taxonomy($item_wrapper, 'field_learning_zone_category');
+
+            // process resource type
+            $classification_resource_type = retrieve_taxonomy($item_wrapper, 'field_resource_type_category');
+
+
+            // generate primary page
+            $node['title'] = $node['title'];
+            // pdf image
+            $small_image = retrieve_image($item_wrapper, 'field_small_image', true);
+
+            // activity Summary
+            $summary = retrieve_activity_summary($item_wrapper);
+
+            if (!empty($small_image)) {
+                $file_path = '/sites/default/files/'.$small_image['filepath'];
+
+                if (isset($small_image['alt'])) {
+                    $summary = '<img class="activity-pdf-image" src="'.$file_path.'" alt="'.$small_image['alt'].'" style="max-width:300px;float:right;"/>' . $summary;
+                } else {
+                    $summary = '<img class="activity-pdf-image" src="'.$file_path.'" alt="PDF Preview" style="max-width:300px;float:right;"/>' . $summary;
+                }
+            }
+
+            // activity time
+            $node['time'] = retrieve_activity_time($item_wrapper);
+
+            // activity learning goals
+            $learning_goals = retrieve_activity_learning_goals($item_wrapper);
+
+            // activity standards
+            $node['standards'] = retrieve_activity_standards($item_wrapper);
+
+            // activity materials
+            $materials = retrieve_activity_materials($item_wrapper);
+
+            // activity preparation
+            $preparation = retrieve_activity_preparation($item_wrapper);
+
+            // activity directions
+            $directions = retrieve_activity_directions($item_wrapper);
+
+            // activity assessment
+            $assessment = retrieve_activity_assessment($item_wrapper);
+
+
+
+            // generate background pages
+
+            // activity background
+            $background = retrieve_activity_background($item_wrapper);
+
+            // activity tips
+            $tips = retrieve_activity_tips($item_wrapper);
+
+
+            // activity extensions
+            $extensions = retrieve_activity_extensions($item_wrapper);
+
+
+            // activity related  activities
+            $related_activities = retrieve_activity_related_activities($item_wrapper);
+
+
+            // activity related links
+            $related_links = retrieve_activity_related_links($item_wrapper);
+
+
+            // activity sources
+            $sources = retrieve_activity_sources($item_wrapper);
+
+
+
+            // generate student pages
+
+
+            // activity student intro
+            $student_introduction = retrieve_activity_student_introduction($item_wrapper);
+
+            // activity student background
+            $student_background = retrieve_activity_student_background($item_wrapper);
+
+
+            // activity student materials
+            $student_materials = retrieve_activity_student_materials($item_wrapper);
+
+
+            // activity student instructions
+            $student_instructions = retrieve_activity_student_instructions($item_wrapper);
+
+
+            // activity student worksheets
+            $student_worksheets = retrieve_activity_student_worksheets($item_wrapper);
+
+
+            // activity student reflections
+            $student_reflections = retrieve_activity_student_reflections($item_wrapper);
+
+
+            // activity student assessments
+            $student_assessments = retrieve_activity_student_assessments($item_wrapper);
+
+
+
+            // body/summary
+            $node['body'] = $summary . $learning_goals . $materials . $preparation . $directions . $assessment . $background . $tips . $extensions . $related_links . $related_activities . $sources;
+
+
+            // scan body for image files and file files
+            find_exportables($node['body']);
+
+            $teaser = retrieve_body($item_wrapper);
+            if (!empty($teaser)) {
+                $node['teaser'] =  $teaser;
+            }
+
+            // taxonomies
+            $activity_type = retrieve_activity_type($item_wrapper);
+            if (!empty($activity_type)) {
+                $node['activity_type'] = $activity_type;
+            }
+            $special_collections = retrieve_special_collections($item_wrapper);
+            if (!empty($special_collections)) {
+                $node['special_collection'] = $special_collections;
+            }
+
+            $grade_levels = retrieve_grade_levels($item_wrapper);
+            if (!empty($grade_levels)) {
+                $node['grade_level'] = $grade_levels;
+            }
+
+            if (!empty($classification_lz_category)) {
+                $node['learning_zone_category'] = $classification_lz_category;
+            }
+            if (!empty($classification_resource_type)) {
+                $node['resource_type'] = $classification_resource_type;
+            }
+
+            // generate main activity
+            $file_path = $item->path['alias'];
+            write_files($file_path, $target_entity_type, $target_bundle, $node);
+
+            // generate student activity
+            if (isset($student_introduction) && !empty($student_introduction)) {
+                $file_path = $item->path['alias'].'/student';
+                $node['title'] = $node['title'] . ' - Student Page';
+                unset($node['time'], $node['related_links'], $node['standards'], $node['activity_type'], $node['special_collection'], $node['grade_level'], $node['learning_zone_category'], $node['resource_type'], $node['teaser_image'], $node['summary']);
+                $node['body'] = $student_introduction . $student_background . $student_materials . $student_instructions . $student_worksheets .  $student_reflections .   $student_assessments;
+                write_files($file_path, $target_entity_type, $target_bundle, $node);
+            }
+
+
+            // generate redirects
+            if( !empty($redirects) ){
+
+              unset($node);
+              $node = [];
+              $node['generated'] = date(DATE_ATOM);
+              $node['sources'] = $redirects;
+              $file_path = $item->path['alias'];
+              $target_entity_type = 'redirects';
+              $target_bundle = '';
+
+              write_files($file_path, $target_entity_type, $target_bundle, $node);
+
+            }
+        }
+        $counter++;
+      }
+    }
+
+    return '<h2>Done Processing</h2><p>Exported content is located in your files in the /source-site/ directory.</p>';
+}
+/**
+*   Export the media content type as basic page
+*
+**/
+function scied_export_basic_page($source_bundle)
+{
+    $source_entity_type = 'node';
+
+    $data_items = retrieve_data($source_entity_type, $source_bundle);
+
+  //print_var(count($data_items));
+  //exit();
+  // counter is a workaround for too large data bunches that take too long to process
+  $counter = 0;
+  $min = 300;
+  $max = 324;
+  // images have 185
+  // media/video/interactive has 93
+  // long content has 324
+
+
+    foreach ($data_items as $item) {
+      if($counter >= $min && $counter <= $max ){
+
+        $target_entity_type = 'node';
+        $target_bundle = 'basic_page';
+
+        $item_wrapper = entity_metadata_wrapper($source_entity_type, $item);
+
+        $redirects = retrieve_redirects($item->nid, $item->path['alias']);
+
+        $node = [];
+        $node['generated'] = date(DATE_ATOM);
+        $node['title'] = $item->title;
+        $node['published'] = true;
+        $node['created'] = date(DATE_ATOM, $item->created);
+        $node['updated'] = date(DATE_ATOM, $item->changed);
+        $node['weight'] = retrieve_weight($item_wrapper);
+        // copywrite
+        $copyright = retrieve_copyright($item_wrapper);
+
+
+
+        // process lz categories
+        $classification_lz_category = retrieve_taxonomy($item_wrapper, 'field_learning_zone_category');
+
+        // process resource type
+        $classification_resource_type = retrieve_taxonomy($item_wrapper, 'field_resource_type_category');
+
+        // discipline
+        $classification_discipline = retrieve_taxonomy($item_wrapper, 'field_discipline');
+
+        // process similar pages
+        $resource_links = retrieve_links($item_wrapper, 'field_similar_pages');
+        if (!empty($resource_links)) {
+            $node['resource_links'] = $resource_links;
+        }
+
+
+        // process related_resources
+        $related_links = retrieve_links($item_wrapper, 'field_related_resources');
+        if (!empty($related_links)) {
+            $node['related_links'] = $related_links;
+        }
+
+        // body and summary
+        $body = retrieve_body($item_wrapper);
+        $embed_content = '';
+        if ($source_bundle == 'video') {
+            // embed code for video
+            $embed_content = retrieve_media_embed_snippet($item_wrapper);
+        } elseif ($source_bundle == 'image') {
+            // embed code for image
+            $embed_content = retrieve_image_snippet($item_wrapper);
+        }
+
+        $node['body'] =  $embed_content . $body .$copyright;
+        // scan body for image files and file files
+        find_exportables($node['body']);
+
+        $teaser = retrieve_summary($item_wrapper);
+        if (!empty($teaser)) {
+            $node['teaser'] =  $teaser;
+        }
+
+        // taxonomies
+        $grade_levels = retrieve_grade_levels($item_wrapper);
+        if (!empty($grade_levels)) {
+            $node['grade_level'] = $grade_levels;
+        }
+
+        if (!empty($classification_lz_category)) {
+            $node['learning_zone_category'] = $classification_lz_category;
+        }
+        if (!empty($classification_resource_type)) {
+            $node['resource_type'] = $classification_resource_type;
+        }
+        if (!empty($classification_discipline)) {
+            $node['discipline'] = $classification_discipline;
+        }
+
+        // teaser images
+        $teaser_image = retrieve_image($item_wrapper, 'field_200x100_teaser_image');
+        if (!empty($teaser_image)) {
+            $node['teaser_image'] = $teaser_image;
+        }
+        //$node['teaser_images_large'] = retrieve_image($item_wrapper, 'field_300x100_image_for_menu_pag');
+
+        $file_path = $item->path['alias'];
+        write_files($file_path, $target_entity_type, $target_bundle, $node);
+
+        // generate redirects
+        if( !empty($redirects) ){
+
+          unset($node);
+          $node = [];
+          $node['generated'] = date(DATE_ATOM);
+          $node['sources'] = $redirects;
+          $file_path = $item->path['alias'];
+          $target_entity_type = 'redirects';
+          $target_bundle = '';
+
+          write_files($file_path, $target_entity_type, $target_bundle, $node);
+
+        }
+
+    }
+    $counter++;
+  }
+
+    return '<h2>Done Processing</h2><p>Exported content is located in your files in the /source-site/ directory.</p>';
+}
+
+/**
+*   Export the content
+*
+**/
+function scied_export_main_page()
+{
+    return '<p>Exported content is located in your files in the /source-site/ directory.</p>';
+}
+
+// crappy debugging only - delete before end
+function print_var($var)
+{
+    print '<pre>';
+    print_r($var);
+    print '</pre>';
+}

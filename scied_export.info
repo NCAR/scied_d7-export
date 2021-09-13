@@ -1,0 +1,8 @@
+; $Id$
+name = SciEd Export
+description = Export all SciEd content
+
+package = "UCAR"
+core = 7.x
+php = 5.x
+version = "7.x-1.0"
