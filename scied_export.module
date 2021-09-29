@@ -205,7 +205,7 @@ function retrieve_image($item_wrapper, $image_type_name, $complete_data = false)
               }
 
               if (isset($image_export_data['file_path'])) {
-                  write_image_files($image_export_data, $image_export_data['name']);
+                  //write_image_files($image_export_data, $image_export_data['name']);
               }
 
               if ($complete_data == false) {
@@ -314,17 +314,33 @@ function retrieve_copyright($item_wrapper)
 
 /**
 *
+**/
+function retrieve_image_teaser($item_wrapper){
+  if (isset($item_wrapper->field_larg_image)) {
+      $large_image = retrieve_image($item_wrapper, 'field_larg_image', true);
+      $a_filepath = explode('/', $large_image['filepath']);
+      $filename = $a_filepath[count($a_filepath)-1];
+
+      return '/media/image/'.$filename;
+  }
+  return false;
+}
+/**
+*
 *
 **/
 function retrieve_image_snippet($item_wrapper)
 {
     $image_content = '';
     if (isset($item_wrapper->field_larg_image)) {
-        $large_image = retrieve_image($item_wrapper, 'field_larg_image');
+        $large_image = retrieve_image($item_wrapper, 'field_larg_image', true);
+
         $box_width = $large_image['width'];
+        $a_filepath = explode('/', $large_image['filepath']);
+        $filename = $a_filepath[count($a_filepath)-1];
 
         $image_content .= '<div class="imagecontent-image" style="max-width:'.$box_width.'px;">';
-        $image_content .= '<img class="imagecontent" src="'.str_replace('public://', '/sites/default/files/', $large_image['uri']).'" alt="'.$large_image['alt'].'" width="'.$large_image['width'].'" height="'.$large_image['height'].'" />';
+        $image_content .= '<img class="imagecontent" src="/sites/default/files/media/images/'. $filename.'" alt="'.$large_image['alt'].'" width="'.$large_image['width'].'" height="'.$large_image['height'].'" />';
 
         // credit
         if (isset($item_wrapper->field_image_credit)) {
@@ -455,10 +471,12 @@ function retrieve_links($item_wrapper, $link_type)
                 $url = rm_whitespace($link['url']);
                 if (!is_absolute($url)) {
                     if (!relative_url_slash_exists($url)) {
-                        $url = '/' . $url;
+                        $url = 'base:/' . $url;
+                    } else {
+                      $url = 'base:' . $url;
                     }
                 }
-                $a_temp['url'] = $url;
+                $a_temp['uri'] = $url;
                 $a_temp['title'] = rm_whitespace($link['title']);
                 array_push($a_links, $a_temp);
             }
@@ -519,12 +537,12 @@ function retrieve_activity_time($item_wrapper)
 function retrieve_activity_learning_goals($item_wrapper)
 {
     $str = '';
-    if (isset($item_wrapper->field_activity_learning_goals) && $item_wrapper->field_activity_materials->value()) {
+    if (isset($item_wrapper->field_activity_learning_goals) && $item_wrapper->field_activity_learning_goals->value()) {
         try {
             // normalize section titles
             $a_search = array('<h2>Learning Objectives:</h2>', '<h2><strong>Learning Goals</strong></h2>','<h2><strong>Learning Goal</strong></h2>', '<h2>Learning<strong> Goal</strong></h2>', '<h2>Learning Goal:</h2>');
             $a_replace = array('<h2>Learning Objectives</h2>', '<h2>Learning Goals</h2>', '<h2>Learning Goal</h2>', '<h2>Learning Goal</h2>', '<h2>Learning Goal</h2>');
-            $str = str_replace($a_search, $a_replace, rm_whitespace($item_wrapper->field_activity_materials->value()['value']));
+            $str = str_replace($a_search, $a_replace, rm_whitespace($item_wrapper->field_activity_learning_goals->value()['value']));
         } catch (EntityMetadataWrapperException $exc) {
             // no action
         }
@@ -1055,6 +1073,126 @@ function clean_text($string)
 *
 *
 **/
+function process_body_images($body){
+  // get all local image paths
+  // process image tags
+
+  $doc = new DOMDocument();
+  @$doc->loadHTML($body);
+  $img_tags = $doc->getElementsByTagName('img');
+  $a_image_paths = [];
+
+  foreach ($img_tags as $tag) {
+    $imgSrc = $tag->getAttribute('src');
+
+    $imgInfo = parse_url($imgSrc);
+    // ensure is a relative path
+    if (! empty($imgInfo['host'])) {
+        // if absolute path check if is a scied file
+        if (str_contains($imgInfo['host'], 'scied.ucar.edu')) {
+          $full_path = $imgInfo['path'];
+          $a_parts = explode('/',$full_path);
+          $filename = array_pop($a_parts);
+          $replaceable_path = implode('/',$a_parts);
+          array_push($a_image_paths, 'src="'.$replaceable_path);
+
+        }
+    } elseif (empty($imgInfo['host'])) {
+        // already relative
+        $full_path = $imgInfo['path'];
+        $a_parts = explode('/',$full_path);
+        $filename = array_pop($a_parts);
+        $replaceable_path = implode('/',$a_parts);
+
+        array_push($a_image_paths, 'src="'.$replaceable_path);
+      }
+
+  }
+  $a_image_paths = array_unique($a_image_paths);
+
+
+
+  $body = str_replace($a_image_paths, 'src="/sites/default/files/media/images', $body);
+  return $body;
+}
+
+/**
+*
+*
+*/
+function process_body_files($body){
+  // get all local image paths
+  // process image tags
+
+  $file_ext = array('doc', 'docx', 'ppt', 'pptx', 'xls', 'xlsx', 'pdf');
+  $img_ext = array('jpg','gif','png','jpeg', 'JPG', 'GIF', 'PNG','JPEG');
+
+  $body = str_replace('href="https://scied.ucar.edu/', 'href="/', $body);
+  $body = str_replace('href="http://scied.ucar.edu/', 'href="/', $body);
+
+  $doc = new DOMDocument();
+  @$doc->loadHTML($body);
+  $href_tags = $doc->getElementsByTagName('a');
+  $a_image_paths = [];
+  $a_document_paths = [];
+
+  foreach ($href_tags as $tag) {
+    $hrefSrc = $tag->getAttribute('href');
+
+    $hrefInfo = parse_url($hrefSrc);
+    // ensure is a relative path
+    if (! empty($hrefInfo['host'])) {
+        // if absolute path check if is a scied file
+        if (str_contains($hrefInfo['host'], 'scied.ucar.edu')) {
+          $full_path = $hrefInfo['path'];
+          $a_parts = explode('/',$full_path);
+          $filename = array_pop($a_parts);
+          $replaceable_path = implode('/',$a_parts);
+
+
+          $ext = pathinfo($filename, PATHINFO_EXTENSION);
+          // is this a file
+          if (in_array($ext, $file_ext)) {
+            array_push($a_document_paths, 'href="'.$replaceable_path);
+          } else   if (in_array($ext, $img_ext)) {
+            // is this an image
+            array_push($a_image_paths, 'href="'.$replaceable_path);
+          }
+        }
+    } elseif (empty($hrefInfo['host'])) {
+        // already relative
+        $full_path = $hrefInfo['path'];
+        $a_parts = explode('/',$full_path);
+        $filename = array_pop($a_parts);
+        $replaceable_path = implode('/',$a_parts);
+
+
+        $ext = pathinfo($filename, PATHINFO_EXTENSION);
+        // is this a file
+        if (in_array($ext, $file_ext)) {
+          array_push($a_document_paths, 'href="'.$replaceable_path);
+
+        } else   if (in_array($ext, $img_ext)) {
+          // is this an image
+          array_push($a_image_paths, 'href="'.$replaceable_path);
+
+        }
+      }
+  }
+
+  $a_image_paths = array_unique($a_image_paths);
+  $a_document_paths = array_unique($a_document_paths);
+  $body = str_replace($a_image_paths, 'href="/sites/default/files/media/images', $body);
+  $body = str_replace($a_document_paths, 'href="/sites/default/files/media/documents', $body);
+
+
+  return $body;
+}
+
+/**
+*
+*
+**/
 function find_exportables($content)
 {
     $doc = new DOMDocument();
@@ -1318,7 +1456,7 @@ function scied_export_activities()
 // counter is a workaround for too large data bunches that take too long to process
 $counter = 0;
 $min = 0;
-$max = 50;
+$max = 138;
 
   foreach ($data_items as $item) {
     if($counter >= $min && $counter <= $max ){
@@ -1346,7 +1484,6 @@ $max = 50;
 
 
             // generate primary page
-            $node['title'] = $node['title'];
             // pdf image
             $small_image = retrieve_image($item_wrapper, 'field_small_image', true);
 
@@ -1364,13 +1501,13 @@ $max = 50;
             }
 
             // activity time
-            $node['time'] = retrieve_activity_time($item_wrapper);
+            $time = retrieve_activity_time($item_wrapper);
 
             // activity learning goals
             $learning_goals = retrieve_activity_learning_goals($item_wrapper);
 
             // activity standards
-            $node['standards'] = retrieve_activity_standards($item_wrapper);
+            $standards = retrieve_activity_standards($item_wrapper);
 
             // activity materials
             $materials = retrieve_activity_materials($item_wrapper);
@@ -1389,7 +1526,10 @@ $max = 50;
             // generate background pages
 
             // activity background
-            $background = retrieve_activity_background($item_wrapper);
+            $background = '<a name="background"></a>'.retrieve_activity_background($item_wrapper);
+            if(!empty($background)){
+              $background = '<p><a href="#scied_top">Return to top</a></p>' .$background;
+            }
 
             // activity tips
             $tips = retrieve_activity_tips($item_wrapper);
@@ -1441,18 +1581,29 @@ $max = 50;
             // activity student assessments
             $student_assessments = retrieve_activity_student_assessments($item_wrapper);
 
+            $node['body_format'] = 'full_html';
 
 
             // body/summary
-            $node['body'] = $summary . $learning_goals . $materials . $preparation . $directions . $assessment . $background . $tips . $extensions . $related_links . $related_activities . $sources;
+            $body = '<a name="scied_top"></a>'.$summary . $learning_goals . $time . $standards . $materials . $preparation . $directions . $assessment . $background . $tips . $extensions . $related_links . $related_activities . $sources;
+
+            //fix local images
+            $body = process_body_images($body);
+
+            // fix local files
+            $body = process_body_files($body);
+
+            $node['body'] = $body;
 
 
             // scan body for image files and file files
-            find_exportables($node['body']);
+            //find_exportables($node['body']);
 
             $teaser = retrieve_body($item_wrapper);
             if (!empty($teaser)) {
                 $node['teaser'] =  $teaser;
+            } else {
+                $node['teaser'] =  $summary;
             }
 
             // taxonomies
@@ -1473,8 +1624,28 @@ $max = 50;
             if (!empty($classification_lz_category)) {
                 $node['learning_zone_category'] = $classification_lz_category;
             }
+
             if (!empty($classification_resource_type)) {
                 $node['resource_type'] = $classification_resource_type;
+            }
+            // add link to student page
+            if(!empty($background)){
+              $bkg_jump = '<a href="#background">Jump to background information</a>';
+            }
+            if (isset($student_introduction) && !empty($student_introduction)) {
+              $stud_link = '<a href="/'.$item->path['alias'].'/student">View the student page</a>';
+            }
+
+            if($bkg_jump && $stud_link) {
+              $jump_menu = '<p class="scied_jump_menu">'. $bkg_jump .' | '. $stud_link .'<p>';
+            } else if($bkg_jump) {
+              $jump_menu = '<p class="scied_jump_menu">'. $bkg_jump .'<p>';
+            } else if($stud_link){
+              $jump_menu = '<p class="scied_jump_menu">'. $stud_link .'<p>';
+            }
+
+            if($jump_menu){
+                $node['body'] = $jump_menu . $node['body'];
             }
 
             // generate main activity
@@ -1485,7 +1656,7 @@ $max = 50;
             if (isset($student_introduction) && !empty($student_introduction)) {
                 $file_path = $item->path['alias'].'/student';
                 $node['title'] = $node['title'] . ' - Student Page';
-                unset($node['time'], $node['related_links'], $node['standards'], $node['activity_type'], $node['special_collection'], $node['grade_level'], $node['learning_zone_category'], $node['resource_type'], $node['teaser_image'], $node['summary']);
+                unset($node['related_links'], $node['activity_type'], $node['special_collection'], $node['grade_level'], $node['learning_zone_category'], $node['resource_type'], $node['teaser_image'], $node['primary_image'], $node['summary']);
                 $node['body'] = $student_introduction . $student_background . $student_materials . $student_instructions . $student_worksheets .  $student_reflections .   $student_assessments;
                 write_files($file_path, $target_entity_type, $target_bundle, $node);
             }
@@ -1526,7 +1697,7 @@ function scied_export_basic_page($source_bundle)
   //exit();
   // counter is a workaround for too large data bunches that take too long to process
   $counter = 0;
-  $min = 300;
+  $min = 0;
   $max = 324;
   // images have 185
   // media/video/interactive has 93
@@ -1565,20 +1736,26 @@ function scied_export_basic_page($source_bundle)
         $classification_discipline = retrieve_taxonomy($item_wrapper, 'field_discipline');
 
         // process similar pages
-        $resource_links = retrieve_links($item_wrapper, 'field_similar_pages');
+        $resource_links = retrieve_links($item_wrapper, 'field_related_resources');
         if (!empty($resource_links)) {
             $node['resource_links'] = $resource_links;
         }
 
 
         // process related_resources
-        $related_links = retrieve_links($item_wrapper, 'field_related_resources');
+        $related_links = retrieve_links($item_wrapper, 'field_similar_pages');
         if (!empty($related_links)) {
             $node['related_links'] = $related_links;
         }
 
         // body and summary
         $body = retrieve_body($item_wrapper);
+        // fix local images
+        $body = process_body_images($body);
+
+        // fix local files
+        $body = process_body_files($body);
+
         $embed_content = '';
         if ($source_bundle == 'video') {
             // embed code for video
@@ -1590,11 +1767,13 @@ function scied_export_basic_page($source_bundle)
 
         $node['body'] =  $embed_content . $body .$copyright;
         // scan body for image files and file files
-        find_exportables($node['body']);
+        //find_exportables($node['body']);
 
         $teaser = retrieve_summary($item_wrapper);
         if (!empty($teaser)) {
             $node['teaser'] =  $teaser;
+        } else {
+          $node['teaser'] =  $item->title;
         }
 
         // taxonomies
@@ -1614,10 +1793,24 @@ function scied_export_basic_page($source_bundle)
         }
 
         // teaser images
-        $teaser_image = retrieve_image($item_wrapper, 'field_200x100_teaser_image');
+        if ($source_bundle == 'image') {
+            // embed code for image
+            $embed_content = retrieve_image_snippet($item_wrapper);
+            $teaser_image = retrieve_image_teaser($item_wrapper);
+        } else {
+          $teaser_image = retrieve_image($item_wrapper, 'field_200x100_teaser_image', false);
+        }
+
         if (!empty($teaser_image)) {
             $node['teaser_image'] = $teaser_image;
+            $node['primary_image'] = $teaser_image;
+        } else {
+          $node['teaser_image'] = '/media/image/yellowstone-rainbow.jpg';
+          $node['primary_image'] = '/media/image/yellowstone-rainbow.jpg';
         }
+
+
+        $node['body_format'] = 'full_html';
         //$node['teaser_images_large'] = retrieve_image($item_wrapper, 'field_300x100_image_for_menu_pag');
 
         $file_path = $item->path['alias'];
